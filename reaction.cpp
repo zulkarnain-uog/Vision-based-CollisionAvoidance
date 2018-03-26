@@ -93,10 +93,11 @@
 #include <mavros_msgs/State.h>
 #include <sensor_msgs/Imu.h>
 #include <stdbool.h>
-
+#include "mavros_msgs/WaypointPull.h"
+#include "mavros_msgs/WaypointPush.h"
 using namespace std;
 
-ros::Time prev_Time;
+
 
 //-----------------------------------------//
 //-------------Sub and Pub-----------------//
@@ -108,20 +109,23 @@ ros::Subscriber OverrideRCIn_msg;
 //-----------------------------------------//
 //---------------Classes-------------------//
 //-----------------------------------------//
-void move(double PID_RCIn, double Tuning, double react);
+void move(double Tuning, double double PID, double detection, double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest, bool reaction_flag);
 void PID(double Error, double new_Error, double P, double I, double D);
 void double shortestDist(double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest, bool reaction_flag);
 void cartesian_to_spherical(double x, double y, double z);
 void PID_RCIn(double OverrideRCIn_msg, double OverrideRCIn, double PID);
 void react(double dshortest, double sensor_msgs);
 void Tuning (double P, double I, double D, double Kp, double Ki, double Kd);
+void Goal();//retrieve/set flight path before flight and go back to it once Collision Avoidance done
 
 //-----------------------------------------//
 //----------------Main---------------------//
 //-----------------------------------------//
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "reaction");
+	ros::Time prev_Time;
+	
+	ros::init(argc, argv, "reaction");
 
     ros::NodeHandle nh;
     ros::Rate loop_rate(10);
@@ -222,7 +226,7 @@ int main(int argc, char **argv)
 		}
 
 //move UAV
-double move(double Tuning, double double PID, double detection, double shortestDist)
+double move(double Tuning, double double PID, double detection, double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest, bool reaction_flag)
 {
 	/*Assume: Top left --> 1,2,3,4 --> Bottom Left (Clockwise direction)
 			: Channel value range from 1000 - 2000 (1000 = idle, 2000 = full throttle)
@@ -241,12 +245,15 @@ double move(double Tuning, double double PID, double detection, double shortestD
 	{
 		if(reaction_flag == 0)
 		{
+
+			//command input using OverrideRCIn
 			mavros/rc/override = [1200, 1200, 1350, 1350]; //Pitch down / move forward
 		}
 	}else {// reaction
-		if(shortestL == 1){//inherent priority
+		if(shortestL == 1){//inherent priority where LEFT has obstacle
 
-			for(int i = 0; i < 20; i++)//Keep yawing for some time
+			//First suggested method
+			for(int i = 0; i < 20; i++)//Keep yawing right for some time
 			{
 				mavros/rc/OverrideRCIn = [1350, 1300, 1350, 1300]; //Yaw Right/left
 			}
@@ -254,17 +261,65 @@ double move(double Tuning, double double PID, double detection, double shortestD
 			ros::Duration(0.5).sleep(); //Tiny delay to reduce overshoot
 			
 			for(int i = 0; i < 20; i++)//move straight
-						{
-							mavros/rc/OverrideRCIn = [1350, 1300, 1350, 1300]; //Yaw Right/left
-						}
-		}else if (shortestR == 1){
-
+			{
+				mavros/rc/override = [1200, 1200, 1350, 1350]; //Pitch down / move forward
+			}
+			//Possible method other than using for loop?
+			ros::Rate(2);// 0.5second loop
+			while(ros::ok)
+			{
+				mavros/rc/override = [1300, 1350, 1300, 1350]; //Yaw Left/right
+			}	
+		//leave loop here
+			
+		}else if (shortestR == 1){// RIGHT has obstacle
+			
+			//First suggested method
+			for(int i = 0; i < 20; i++)//Keep yawing for some time
+			{
+				mavros/rc/override = [1300, 1350, 1300, 1350]; //Yaw Left/right
+			}
+			
+			ros::Duration(0.5).sleep(); //Tiny delay to reduce overshoot
+			
+			for(int i = 0; i < 20; i++)//move straight
+			{
+				mavros/rc/override = [1200, 1200, 1350, 1350]; //Pitch down / move forward
+			}
+			//Possible method other than using for loop?
+			ros::Rate(2);// 0.5second loop
+			while(ros::ok)
+			{
+				mavros/rc/OverrideRCIn = [1350, 1300, 1350, 1300]; //Yaw Right/left
+			}
+		//leave loop here
+			
 		}else if (shortestC == 1){
 
+			//First suggested method
+			for(int i = 0; i < 20; i++)//Keep yawing right for some time
+			{
+				mavros/rc/OverrideRCIn = [1350, 1300, 1350, 1300]; //Yaw Right/left
+			}
+			
+			ros::Duration(0.5).sleep(); //Tiny delay to reduce overshoot
+			
+			for(int i = 0; i < 20; i++)//move straight
+			{
+				mavros/rc/override = [1200, 1200, 1350, 1350]; //Pitch down / move forward
+			}
+			//Possible method other than using for loop?
+			ros::Rate(2);// 0.5second loop
+			while(ros::ok)
+			{
+				mavros/rc/override = [1300, 1350, 1300, 1350]; //Yaw Left/right
+			}	
+		//leave loop here
+			
 		}
 	}
+			//Insert code to go back to pre-programmed pathing 
 			ros::spinOnce();
-
 }
 
 //-----------------------------------------//
