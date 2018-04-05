@@ -77,27 +77,19 @@
 #include <cmath>
 #include "ros/ros.h"
 #include "geometry_msgs/PointStamped.h"
-#include "geometry_msgs/Twist.h"
 #include "geometry_msgs/TwistStamped.h"
-#include "geometry_msgs/Vector3.h"
-#include "geometry_msgs/Quaternion.h"
-#include "geometry_msgs/Accel.h"
 #include "mavros/mavros.h"
-#include "mavros/frame_tf.h"
 #include "mavros/px4_custom_mode.h"
 #include "mavros_msgs/OverrideRCIn.h"
 #include <ros/console.h>
-#include <urdf/model.h>
 #include <mavros_msgs/RCOut.h>
 #include <sensor_msgs/JointState.h>
 #include <mavros_msgs/State.h>
 #include <sensor_msgs/Imu.h>
-#include <stdbool.h>
-#include "mavros_msgs/WaypointPull.h"
-#include "mavros_msgs/WaypointPush.h"
+#include "rosconsole/macros_generated.h"
 #include "sensor_msgs/Imu.h"
 #include "mavros_msgs/PositionTarget.h"
-#include "std_msgs/MultiArrayDimension.h"
+#include "std_msgs/Float64MultiArray.h"
 
 using namespace std;
 
@@ -106,21 +98,258 @@ double prev_Time = ros::Time::now().toSec();
 //-----------------------------------------//
 //---------------Classes-------------------//
 //-----------------------------------------//
-void move(double Tuning, double double PID, double detection, double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest, double shortestDist);
-void PID(double Error, double new_Error, double P, double I, double D);
-void shortestDist(double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest);
-void cartesian_to_spherical(double x, double y, double z);
-void PID_RCIn(double OverrideRCIn_msg, double OverrideRCIn, double PID);
-void react(double dshortest, double sensor_msgs);
+void move(bool detect_flag, bool shortestL,	bool shortestR,	bool shortestC,	double dshortest);
+//void PID(double Error, double new_Error, double P, double I, double D);
+//void shortestDist(double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest);
+//void cartesian_to_spherical(double x, double y, double z);
+//void PID_RCIn(double OverrideRCIn_msg, double OverrideRCIn, double PID);
+//void react(double dshortest, double sensor_msgs);
 //void Tuning (double P, double I, double D, double Kp, double Ki, double Kd);
 
+//-----------------------------------------//
+//-------Subscriber and Publisher ---------//
+//-----------------------------------------//
+class SubscribeAndPublishIMU
+{
+public:
+  SubscribeAndPublishIMU()
+  {
+
+	  current_IMU = nh.subscribe<sensor_msgs::Imu>("/sensor_msgs/Imu", 50, imu_cb);//Get IMU status and values
+
+	  update_IMU = nh.advertise<sensor_msgs::Imu>("/sensor_msgs/Imu", 50);
+
+  }
+
+  void imu_cb (const sensor_msgs::ImuConstPtr& rcoutmsg)
+  {
+  	sensor_msgs::Imu IMU;
+
+  	ROS_INFO("Angular velocity: ", IMU.angular_velocity);
+  	ROS_INFO("Angular velocity covariance: ", IMU.angular_velocity_covariance);
+  	ROS_INFO("linear acceleration: ", IMU.linear_acceleration);
+  	ROS_INFO("linear acceleration covariance: ", IMU.linear_acceleration_covariance);
+
+  	update_IMU.publish(IMU);
+  }
+
+private:
+  ros::NodeHandle nh;
+  ros::Publisher update_IMU;
+  ros::Subscriber current_IMU;
+
+};
+
+class SubscribeAndPublishState
+{
+public:
+  SubscribeAndPublishState()
+  {
+
+	  current_state = nh.subscribe<mavros_msgs::State>("/mavros_msgs/state", 60, state_cb);	//Get current UAV status
+
+	  update_state = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 60);
+
+  }
+
+  void state_cb (const mavros_msgs::StateConstPtr& statemsg)
+  {
+  	mavros_msgs::State current_state;
+
+  	// wait for FCU connection
+      while(ros::ok() && !current_state.connected){
+      	ros::spinOnce();
+      	ros::Duration().sleep();
+      }
+      while(ros::ok() && current_state.connected)
+      {
+          mavros_msgs::CommandBool arm_cmd;
+          arm_cmd.request.value = 1;
+          ROS_INFO("Arming status: %s", arm_cmd.Response);
+      }
+
+
+  //    mavros_msgs::SetMode offb_set_mode;
+  //    offb_set_mode.request.custom_mode = "OFFBOARD";
+  //
+  //    ros::Time last_request = ros::Time::now();
+  //
+  //    while(ros::ok()){
+  //        if( current_state.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0)))
+  //        {
+  //            if( set_mode_client.call(offb_set_mode) && offb_set_mode.response.mode_sent)
+  //            {
+  //                ROS_INFO("Offboard enabled");
+  //            }
+  //            last_request = ros::Time::now();
+  //        } else {
+  //            if( !current_state.armed && (ros::Time::now() - last_request > ros::Duration(5.0)))
+  //            {
+  //                if( arming_client.call(arm_cmd) && arm_cmd.)
+  //                {
+  //                    ROS_INFO("Vehicle armed");
+  //                }
+  //                last_request = ros::Time::now();
+  //            }
+  //        }
+      	update_state.publish(current_state);
+        ros::spinOnce();
+        ros::Duration().sleep();
+  }
+
+private:
+  ros::NodeHandle nh;
+  ros::Publisher update_state;
+  ros::Subscriber current_state;
+
+};
+
+class SubscribeAndPublishInitiate
+{
+public:
+  SubscribeAndPublishInitiate()
+  {
+
+	  local_pose = nh.subscribe<mavros_msgs::PositionTarget>("/mavros_msgs/PositionTarget", 60, PoseTarg_cb);				//Get Current pose
+	  local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("mavros_msgs/setpoint_position/local", 60);	//Send goal pose to UAV
+	  goal = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 60);
+
+  }
+
+void PoseTarg_cb (const mavros_msgs::PositionTargetConstPtr& rcoutmsg)
+{
+	mavros_msgs::State current_state;
+	if(ros::ok() && current_state.connected)
+    {
+
+    //move quad to starting position
+
+    	geometry_msgs::PoseStamped pose;
+        pose.pose.position.x = 0;
+        pose.pose.position.y = 0;
+        pose.pose.position.z = 2;
+        ros::Duration(5).sleep(); //sleep for 5 seconds
+
+        local_pos_pub.publish(pose);
+    }
+
+}
+
+private:
+  ros::NodeHandle nh;
+  ros::Publisher goal;
+  ros::Subscriber local_pose;
+  ros::Publisher local_pos_pub;
+
+};
+//-----------------------------------------//
+//---------Subscriber callbacks------------//
+//-----------------------------------------//
+
+void detect_cb (const std_msgs::Float64MultiArrayConstPtr& detectmsg)
+{
+	std_msgs::Float64MultiArray detection_sub;
+	double dshortest;
+	float left, right, center;
+	bool shortestL, shortestR, shortestC;
+
+	left = detection_sub.data[0];
+	right = detection_sub.data[1];
+	center = detection_sub.data[2];
+
+	if (left && right && center < 1)
+	{//only find dshortest when detected distance < 1m from UAV.
+
+		bool detect_flag = 1; //On detect_flag to let us know cam detect object less than 1 metre
+
+		//finding where the dshortest distance is
+		if (left < center){
+
+		bool shortestL = 1;
+		bool shortestR = 0;
+		bool shortestC = 0;
+
+
+		}else if (left < right){
+
+		bool shortestL = 1;
+		bool shortestR = 0;
+		bool shortestC = 0;
+
+
+		}else if (right < center){
+
+		bool shortestL = 0;
+		bool shortestR = 1;
+		bool shortestC = 0;
+
+
+		}else if (right < left){
+
+		bool shortestL = 0;
+		bool shortestR = 1;
+		bool shortestC = 0;
+
+
+		}else if (center < left){
+
+		bool shortestL = 0;
+		bool shortestR = 0;
+		bool shortestC = 1;
+
+
+		}else if (center < right){
+
+		bool shortestL = 0;
+		bool shortestR = 0;
+		bool shortestC = 1;
+
+
+		}
+
+		//getting only the dshortest distance length from 3 inputs
+
+		if (left < right) dshortest = left;
+		if (left < center) dshortest = left;
+		if (right < left) dshortest = right;
+		if (right < center) dshortest = right;
+		if (center < right) dshortest = center;
+		if (center < left) dshortest = center;
+
+		//test by cout
+		ROS_INFO("shortestL: %s\n", shortestL, "shortestC: %s\n", shortestC, "shortestR: %s\n", shortestR, "dshortest: %s\n", dshortest);
+
+		}
+	ros::spin();
+
+
+}
+
+
+
+
+void RCOut_cb (const mavros_msgs::RCOutConstPtr& rcoutmsg)
+{
+	ros::Publisher RC_state_now;
+	mavros_msgs::RCOut RC_now;
+	ROS_INFO("Roll channel: %s", RC_now.channels[1]);
+	ROS_INFO("Pitch channel: %s", RC_now.channels[2]);
+	ROS_INFO("Throttle channel: %s", RC_now.channels[3]);
+	ROS_INFO("Yaw channel: %s", RC_now.channels[4]);
+
+	RC_state_now.publish(RC_now);
+	ros::spin();
+}
+
+ros::Subscriber detection_sub;
+ros::Subscriber RC_state_now;
+ros::Publisher CustomRC;
 
 //-----------------------------------------//
 //----------------Main---------------------//
 //-----------------------------------------//
 int main(int argc, char **argv)
 {
-	ros::Time prev_Time;
 
 	ros::init(argc, argv, "reaction");
 
@@ -130,108 +359,39 @@ int main(int argc, char **argv)
     //-----------------------------------------//
     //----------Assign topic names-------------//
     //-----------------------------------------//
+    ros::Subscriber detection_sub = nh.subscribe<std_msgs::Float64MultiArray>("/detection", 60, detect_cb);					//Get distances from camera
+    ros::Subscriber RC_state_now = nh.subscribe<mavros_msgs::RCOut>("/mavros_msgs/RCOut", 60, RCOut_cb);//Get current RC values
+    ros::Publisher CustomRC = nh.advertise<mavros_msgs::OverrideRCIn>("/mavros_msgs/OverrideRCIn",60);			//Send control input for Collision Avoidance
 
-    ros::Subscriber detection = nh.subscribe<std_msgs::MultiArrayDimension>("detection", 60);					//Get distances from camera
-//    ros::Publisher servo_state = nh.advertise<sensor_msgs::JointState>("servo_state_publisher",10);
-    ros::Subscriber current_state = nh.subscribe<mavros_msgs::State>("mavros/state", 10, state_cb);	//Get current UAV status
-    ros::Publisher local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("mavros/setpoint_position/local", 10);	//Send goal pose to UAV
-    ros::Subscriber IMU = nh.subscribe<sensor_msgs::Imu>("IMU_reading", 50);						//Get IMU status and values
-    ros::Publisher Custom = nh.advertise<mavros_msgs::OverrideRCIn>("Custom_controls",50);			//Send control input for Collision Avoidance
-    ros::Subscriber RC_state_now = nh.subscribe<mavros_msgs::RCOut>("Current RC channel states", 50);//Get current RC values
-    ros::Subscriber goal = nh.subscribe<mavros_msgs::PositionTarget>("Goal_pose", 10);				//Get Current pose
-    ros::Rate rate(50);
+    SubscribeAndPublishIMU SAPIMU;
+    SubscribeAndPublishState SAPState;
 
+    geometry_msgs::PoseStamped pose;
+    mavros_msgs::PositionTarget end;
 
-    	// wait for FCU connection
+	cout << "Select desired pose, x: \n";
+	cin >> end.position.x;
 
-        while(ros::ok() && !current_state.connected){
+	cout << "Select desired pose, y: \n";
+	cin >> end.position.y;
+
+	cout << "Select desired pose, z: \n";
+	cin >> end.position.z;
+
+    while(ros::ok())
+    {
+        do{
+
+        	ros::Rate r(10);
+        	double move();
             ros::spinOnce();
-            rate.sleep();
-        }
+            r.sleep();
 
-    	geometry_msgs::PoseStamped pose;
-        	pose.pose.position.x = 0;
-        	pose.pose.position.y = 0;
-        	pose.pose.position.z = 2;
+    	}while((pose.pose.position.x =! end.position.x) && (pose.pose.position.y != end.position.y) && (pose.pose.position.z != end.position.z));
 
-        	//send a few set-points before starting
-        	for(int i = 100; ros::ok() && i > 0; --i)
-        	{
-            local_pos_pub.publish(pose);
-            ros::spinOnce();
-            rate.sleep();
-        	}
-
-        mavros_msgs::SetMode offb_set_mode;
-        offb_set_mode.request.custom_mode = "OFFBOARD";
-
-        mavros_msgs::CommandBool arm_cmd;
-        arm_cmd.request.value = 1;
-
-        ros::Time last_request = ros::Time::now();
-
-
-        while(ros::ok()){
-            if( current_state.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0)))
-            {
-                if( set_mode_client.call(offb_set_mode) && offb_set_mode.response.mode_sent)
-                {
-                    ROS_INFO("Offboard enabled");
-                }
-                last_request = ros::Time::now();
-            } else {
-                if( !current_state.armed && (ros::Time::now() - last_request > ros::Duration(5.0)))
-                {
-                    if( arming_client.call(arm_cmd) && arm_cmd.response.success)
-                    {
-                        ROS_INFO("Vehicle armed");
-
-                        //Request if tuning is desired
-                        bool Tuning = 1; //1 for yes, 0 for no
-
-                        mavros_msgs::PositionTarget goal;
-                        cout << "Select desired pose, x: \n" << goal.position.x;
-                        cout << "Select desired pose, y: \n" << goal.position.y;
-                        cout << "Select desired pose, z: \n" << goal.position.z;
-
-                        if (!Tuning == 0)
-                          {
-                            do{
-                            	if(dshortest < 1)
-                            	{
-                            		bool reaction_flag = 1;
-                            		double move();
-                            	}else
-                            	{
-                            		bool reaction_flag = 0;
-                            	}
-                            }while((pose.pose.position.x =! goal.position.x) && (pose.pose.position.y != goal.position.y) && (pose.pose.position.z != goal.position.z));
-
-                          }else {
-                               double Tuning();
-                               break;
-                          }
-                    }
-                    last_request = ros::Time::now();
-                }
-            }
-
-            local_pos_pub.publish(pose);
-
-            ros::spinOnce();
-            rate.sleep();
-        }
-
-    	bool Tuning = 0;
-        while (ros::ok)
-        {
-
-        	//insert autotune line here
-
-        }
-
-        return 0;
     }
+
+}
 
 //-----------------------------------------//
 //-------------END OF MAIN-----------------//
@@ -248,7 +408,7 @@ int main(int argc, char **argv)
 //		}
 
 //move UAV
-double move(double Tuning, double PID, double detection, double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest, double shortestDist)
+void move(bool detect_flag, bool shortestL,	bool shortestR,	bool shortestC,	double dshortest)
 {
 	/* RC minimum PWM pulse width in microseconds. Typically 1000 is lower limit, 1500 is neutral and 2000 is upper limit.
 	 *
@@ -303,11 +463,10 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 	//Initializing stage
 	mavros_msgs::OverrideRCIn Custom;
 	mavros_msgs::RCOut State_now;
-	std_msgs::MultiArrayDimension Obsdistance;
-	ros::Time duration = ros::Time::now() + ros::Duration(1);
 
 
-	if(Obsdistance.flag == 1)
+
+	if(detect_flag == 1)
 	{
 		//Initialize neutral point before starting
 		Custom.channels[1] = State_now.channels[1];
@@ -331,7 +490,7 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 				{
 					Custom.channels[i] = 0;//Force all modes to 0;
 					ROS_INFO("Exiting Avoidance loop, ROS is not running.");
-					break;
+
 				}
 		}
 
@@ -342,7 +501,7 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 
 	if (dshortest >  1.00)
 	{
-		if(Obsdistance.flag == 0)
+		if(detect_flag == 0)
 		{
 			while(ros::ok)
 			{
@@ -354,24 +513,25 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 
 		if(shortestL == 1)
 		{//inherent priority where LEFT has obstacle
-			while(Obsdistance.flag ==1)
-			{
+
 				do
 				{
 					Custom.channels[1] = 1600; //Roll right
 					Custom.channels[2] = 1500; //No pitch
 					Custom.channels[3] = State_now.channels[3]; //Current altitude
 					Custom.channels[4] = 1500; //No yaw
+					ROS_INFO("Rolling right");
+					CustomRC.publish(Custom);
 					ros::spinOnce();
-				}while(ros::Time::now() != ros::Time::now() + duration);
-			}
+					bool detect_flag = 0;
+				}while(detect_flag == 1);
 
 			ros::Duration(0.5).sleep(); //Pause for abit
-			break;
+
 
 		}else if (shortestR == 1)
 		{// RIGHT has obstacle
-			while(Obsdistance.flag ==1)
+			while(detect_flag ==1)
 			{
 				do
 				{
@@ -379,17 +539,20 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 					Custom.channels[2] = 1500; //No pitch
 					Custom.channels[3] = State_now.channels[3]; //Current altitude
 					Custom.channels[4] = 1500; //No yaw
+					ROS_INFO("Rolling left");
+					CustomRC.publish(Custom);
 					ros::spinOnce();
-				}while(duration);
+					bool detect_flag = 0;
+				}while(detect_flag == 1);
 			}
 
 			ros::Duration(0.5).sleep(); //Pause for abit
-			break;
+
 
 
 		}else if (shortestC == 1)
 		{//Center detected, move Right
-			while(Obsdistance.flag ==1)
+			while(detect_flag ==1)
 			{
 				do
 				{
@@ -397,100 +560,30 @@ double move(double Tuning, double PID, double detection, double shortestL, doubl
 					Custom.channels[2] = 1500; //No pitch
 					Custom.channels[3] = State_now.channels[3]; //Current altitude
 					Custom.channels[4] = 1500; //No yaw
+					ROS_INFO("Center detected but moving right..");
+					CustomRC.publish(Custom);
 					ros::spinOnce();
-				}while(duration);
+					bool detect_flag = 0;
+				}while(detect_flag == 1);
 			}
 
 			ros::Duration(0.5).sleep(); //Pause for abit
-			break;
+
 
 		}
 	}
 			ros::spinOnce();
-			break;
+
 }
 
 //-----------------------------------------//
 //-------Determine dshortest distance-------//
 //-----------------------------------------//
 
-double shortestDist(double shortestL, double shortestR, double shortestC, double left, double center, double right, double dshortest){
-
-bool reaction_flag = 0; //Flag to signal when code is running avoidance decision making algo
-
-Obsdistance detection_now;
-
-if (detection_now.left && detection_now.right && detection_now.center < 1){//only find dshortest when detected distance < 1m from UAV.
-
-bool reaction_flag = 1;
-	//finding where the dshortest distance is
-if (detection_now.left < detection_now.center){
-
-bool shortestL = 1;
-bool shortestR = 0;
-bool shortestC = 0;
-
-
-}else if (detection_now.left < detection_now.right){
-
-bool shortestL = 1;
-bool shortestR = 0;
-bool shortestC = 0;
-
-
-}else if (detection_now.right < detection_now.center){
-
-bool shortestL = 0;
-bool shortestR = 1;
-bool shortestC = 0;
-
-
-}else if (detection_now.right < detection_now.left){
-
-bool shortestL = 0;
-bool shortestR = 1;
-bool shortestC = 0;
-
-
-}else if (detection_now.center < detection_now.left){
-
-bool shortestL = 0;
-bool shortestR = 0;
-bool shortestC = 1;
-
-
-}else if (detection_now.center < detection_now.right){
-
-bool shortestL = 0;
-bool shortestR = 0;
-bool shortestC = 1;
-
-}else{
-
-bool shortestL = 0;
-bool shortestR = 0;
-bool shortestC = 0;
-
-}
-
-//getting only the dshortest distance length from 3 inputs
-if (detection_now.left < detection_now.right) dshortest = left;
-if (detection_now.left < detection_now.center) dshortest = left;
-if (detection_now.right < detection_now.left) dshortest = right;
-if (detection_now.right < detection_now.center) dshortest = right;
-if (detection_now.center < detection_now.right) dshortest = center;
-if (detection_now.center < detection_now.left) dshortest = center;
-
-//test by cout
-cout << "shortestL : /n" << shortestL << "shortestC : \n" << shortestC << "shortestR : \n"
-		<< shortestR << "dshortest : " << dshortest << endl;
-
-cout << "dshortest : " << dshortest << endl;
-reaction_flag = 0;
-
-}
-return reaction_flag;
-}
+//void shortestDist(bool shortestL, bool shortestR, bool shortestC, double left, double center, double right, double dshortest)
+//{
+//
+//}
 
 ////convert Cartesian to spherical 3D coordinate
 //double cartesian_to_spherical(double x, double y, double z)
@@ -525,189 +618,3 @@ return reaction_flag;
 //
 //}
 
-/*
-//PWM control of motor
-class ServoDescription {
-public:
-	std::string joint_name;
-	float joint_lower;
-	float joint_upper;
-
-	size_t rc_channel;
-
-	uint16_t rc_min;
-	uint16_t rc_max;
-	uint16_t rc_trim;
-	uint16_t rc_dz;
-	bool rc_rev;
-
-	ServoDescription() :
-		joint_name{},
-		joint_lower(-M_PI/4),
-		joint_upper(M_PI/4),
-		rc_channel(0),
-		rc_min(1000),
-		rc_max(2000),
-		rc_trim(1500),
-		rc_dz(0),
-		rc_rev(0)
-	{ };
-
-	ServoDescription(std::string joint_name_, double lower_, double upper_,
-			int channel_,
-			int min_, int max_, int trim_, int dz_,
-			bool rev_) :
-		joint_name(joint_name_),
-		joint_lower(lower_),
-		joint_upper(upper_),
-		rc_channel(channel_),
-		rc_min(min_),
-		rc_max(max_),
-		rc_trim(trim_),
-		rc_dz(dz_),
-		rc_rev(rev_)
-	{ };
-
-	/**
-	 * Normalization code taken from PX4 Firmware
-	 * src/modules/sensors/sensors.cpp Sensors::rc_poll() line 1966
-	 */
-/*	inline float normalize(uint16_t pwm) {
-		// 1) fix bounds
-		pwm = std::max(pwm, rc_min);
-		pwm = std::min(pwm, rc_max);
-
-		// 2) scale around mid point
-		float chan;
-		if (pwm > (rc_trim + rc_dz)) {
-			chan = (pwm - rc_trim - rc_dz) / (float)(rc_max - rc_trim - rc_dz);
-		}
-		else if (pwm < (rc_trim - rc_dz)) {
-			chan = (pwm - rc_trim + rc_dz) / (float)(rc_trim - rc_min - rc_dz);
-		}
-		else {
-			chan = 0.0;
-		}
-
-		if (rc_rev)
-			chan *= -1;
-
-		if (!std::isfinite(chan)) {
-			ROS_DEBUG("SSP: not finite result in RC%zu channel normalization!", rc_channel);
-			chan = 0.0;
-		}
-
-		return chan;
-	}
-
-	float calculate_position(uint16_t pwm) {
-		float channel = normalize(pwm);
-
-		// not sure should i differently map -1..0 and 0..1
-		// for now there arduino map() (explicit)
-		float position = (channel + 1.0) * (joint_upper - joint_lower) / (1.0 + 1.0) + joint_lower;
-
-		return position;
-	}
-};
-
-class ServoStatePublisher {
-public:
-	ServoStatePublisher() :
-		nh()
-	{
-		ros::NodeHandle priv_nh("~");
-
-		XmlRpc::XmlRpcValue param_dict;
-		priv_nh.getParam("", param_dict);
-
-		ROS_ASSERT(param_dict.getType() == XmlRpc::XmlRpcValue::TypeStruct);
-
-		urdf::Model model;
-		model.initParam("robot_description");
-		ROS_INFO("SSP: URDF robot: %s", model.getName().c_str());
-
-		for (auto &pair : param_dict) {
-			ROS_DEBUG("SSP: Loading joint: %s", pair.first.c_str());
-
-			// inefficient, but easier to program
-			ros::NodeHandle pnh(priv_nh, pair.first);
-
-			bool rc_rev;
-			int rc_channel, rc_min, rc_max, rc_trim, rc_dz;
-
-			if (!pnh.getParam("rc_channel", rc_channel)) {
-				ROS_ERROR("SSP: '%s' should provice rc_channel", pair.first.c_str());
-				continue;
-			}
-
-			pnh.param("rc_min", rc_min, 1000);
-			pnh.param("rc_max", rc_max, 2000);
-			if (!pnh.getParam("rc_trim", rc_trim)) {
-				rc_trim = rc_min + (rc_max - rc_min) / 2;
-			}
-
-			pnh.param("rc_dz", rc_dz, 0);
-			pnh.param("rc_rev", rc_rev, 0);
-
-			auto joint = model.getJoint(pair.first);
-			if (!joint) {
-				ROS_ERROR("SSP: URDF: there no joint '%s'", pair.first.c_str());
-				continue;
-			}
-			if (!joint->limits) {
-				ROS_ERROR("SSP: URDF: joint '%s' should provide <limit>", pair.first.c_str());
-				continue;
-			}
-
-			double lower = joint->limits->lower;
-			double upper = joint->limits->upper;
-
-			servos.emplace_back(pair.first, lower, upper, rc_channel, rc_min, rc_max, rc_trim, rc_dz, rc_rev);
-			ROS_INFO("SSP: joint '%s' (RC%d) loaded", pair.first.c_str(), rc_channel);
-		}
-
-		rc_out_sub = nh.subscribe("rc_out", 10, &ServoStatePublisher::rc_out_cb, this);
-		joint_states_pub = nh.advertise<sensor_msgs::JointState>("joint_states", 10);
-	}
-
-	void spin() {
-		if (servos.empty()) {
-			ROS_WARN("SSP: there nothing to do, exiting");
-			return;
-		}
-
-		ROS_INFO("SSP: Initialization done. %zu joints served", servos.size());
-		ros::spin();
-	}
-
-private:
-	ros::NodeHandle nh;
-	ros::Subscriber rc_out_sub;
-	ros::Publisher joint_states_pub;
-
-	std::list<ServoDescription> servos;
-
-	void rc_out_cb(const mavros_msgs::RCOut::ConstPtr &msg) {
-		if (msg->channels.empty())
-			return;		// nothing to do
-
-		auto states = boost::make_shared<sensor_msgs::JointState>();
-		states->header.stamp = msg->header.stamp;
-
-		for (auto &desc : servos) {
-			if (!(desc.rc_channel != 0 && desc.rc_channel <= msg->channels.size()))
-				continue;	// prevent crash on servos not in that message
-
-			uint16_t pwm = msg->channels[desc.rc_channel - 1];
-			if (pwm == 0 || pwm == UINT16_MAX)
-				continue;	// exclude unset channels
-
-			states->name.emplace_back(desc.joint_name);
-			states->position.emplace_back(desc.calculate_position(pwm));
-		}
-
-		joint_states_pub.publish(states);
-	}
-};
-*/
