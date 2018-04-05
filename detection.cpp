@@ -20,13 +20,14 @@
 #include <iomanip>
 #include <stdio.h>
 #include <std_msgs/String.h>
-#include "std_msgs/Float64.h"
+#include "std_msgs/Float64MultiArray.h"
+#include "ros/ros.h"
 using namespace std;
 using namespace rs;
 
 
 
-
+ros::Publisher camera_det;
 
 // Window size and frame rate
 int const INPUT_WIDTH = 320;
@@ -142,9 +143,6 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
 //             cout << arr[_depth_intrin.height][_depth_intrin.width] <<" ";
 //             cout << " " << float(depth_in_meters) << " ";
 
-//			Set up publishing topic
-            std_msgs::Float64 Obsdistance; //To pub: distance.publish(Obsdistance);
-
             if (dy == 120)
             {
 
@@ -158,7 +156,7 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             	a = depth_in_meters++;
             	}
             	L = a / 50;
-		detect_info.left = L;
+
             	cout << "The left side is: " << fixed << setprecision(3) << L << "\t";
             } else if (dx > 130 && dx <= 180)
             {
@@ -167,7 +165,7 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             	b = depth_in_meters++;
             	}
             	C = b / 50;
-		detect_info.center = C;
+
             	cout << "The center is: " << C << "\t";
 
             } else if (dx > 230 && dx <= 280)
@@ -177,7 +175,7 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             	d = depth_in_meters++;
             	}
             	R = d / 50;
-		detect_info.right = R;
+
             	cout << "The right side is: " << R << "\n";
             }
             }
@@ -186,15 +184,15 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             //cout << "end of row" << "\n";
 
 
-	ros::Rate loop_rate(60);
+//				Set up publishing topic
+	            std_msgs::Float64MultiArray Obsdistance; //Declare Obsdistance
+	            Obsdistance.data.resize(2); //Resize the array to assign to existent values
+	            Obsdistance.data[0] = R; //R to first element in the array
+	            Obsdistance.data[1] = L; //L to first element in the array
+	            Obsdistance.data[2] = C; //C to first element in the array
+	            camera_det.publish(Obsdistance);
 
-	Obsdistance.right = R;
-	Obsdistance.left = L;
-	Obsdistance.center = C;
-	Obsdistance.flag = 1;
-	distance.publish(Obsdistance);
-
-	ros::spinOnce();
+	            ros::spinOnce();
 
 	}
 
@@ -242,8 +240,8 @@ int main( int argc, char **argv ) try
 	ros::init(argc, argv, "detection"); //Node called 'detection'
 	ros::NodeHandle nh;
 	//advertise as detection
-	ros::Publisher distance = nh.advertise<std_msgs::Float64>("Obsdistance", 60); //Topic called 'Obsdistance'
-	ros::Rate loop_rate(1);
+	ros::Publisher camera_det = nh.advertise<std_msgs::Float64MultiArray>("/detection", 60); //Pub topic called 'Obsdistance'
+	ros::Rate loop_rate(60);
 
 rs::log_to_console( rs::log_severity::warn );
 
@@ -280,3 +278,6 @@ catch( const std::exception & e )
 std::cerr << e.what() << std::endl;
 return EXIT_FAILURE;
 }
+
+
+
