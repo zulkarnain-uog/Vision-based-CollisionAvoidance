@@ -20,18 +20,12 @@
 #include <iomanip>
 #include <stdio.h>
 #include <std_msgs/String.h>
-
+#include "std_msgs/Float64.h"
 using namespace std;
 using namespace rs;
 
-//Create new type for publishing
-struct Obsdistance {
-	float L;
-	float C;
-	float R;
-} 3_frame_res;
-//Set up publishing topic
-ros::Publisher distance; //To pub: distance.publish(3_frame_res);
+
+
 
 
 // Window size and frame rate
@@ -147,6 +141,10 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             //Displaying array depth data in meters
 //             cout << arr[_depth_intrin.height][_depth_intrin.width] <<" ";
 //             cout << " " << float(depth_in_meters) << " ";
+
+//			Set up publishing topic
+            std_msgs::Float64 Obsdistance; //To pub: distance.publish(Obsdistance);
+
             if (dy == 120)
             {
 
@@ -187,11 +185,14 @@ for(int dx=0; dx<_depth_intrin.width; ++dx)
             myfile << "end of row" << endl;
             //cout << "end of row" << "\n";
 
+
 	ros::Rate loop_rate(60);
-	Obsdistance 3_frame_res.R = R;
-	Obsdistance 3_frame_res.L = L;
-	Obsdistance 3_frame_res.C = C;
-	distance.publish(3_frame_res);
+
+	Obsdistance.right = R;
+	Obsdistance.left = L;
+	Obsdistance.center = C;
+	Obsdistance.flag = 1;
+	distance.publish(Obsdistance);
 
 	ros::spinOnce();
 
@@ -238,10 +239,10 @@ return true;
 int main( int argc, char **argv ) try
 {
 	//Initialize node and node name
-	ros::init(argc, argv, "detection");
+	ros::init(argc, argv, "detection"); //Node called 'detection'
 	ros::NodeHandle nh;
 	//advertise as detection
-	distance = nh.advertise<Obsdistance>("Obsdistance", 60);
+	ros::Publisher distance = nh.advertise<std_msgs::Float64>("Obsdistance", 60); //Topic called 'Obsdistance'
 	ros::Rate loop_rate(1);
 
 rs::log_to_console( rs::log_severity::warn );
@@ -279,6 +280,3 @@ catch( const std::exception & e )
 std::cerr << e.what() << std::endl;
 return EXIT_FAILURE;
 }
-
-
-
