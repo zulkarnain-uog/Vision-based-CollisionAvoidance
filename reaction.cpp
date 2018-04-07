@@ -93,8 +93,19 @@
 
 using namespace std;
 
-double prev_Time = ros::Time::now().toSec();
+ros::Publisher CustomRC;
+ros::Publisher RC_state_now;
+ros::Publisher goal;
+ros::Publisher update_IMU;
+ros::Publisher update_state;
+ros::Publisher local_pos_pub;
 
+ros::Subscriber detection_sub;
+ros::Subscriber current_state;
+ros::Subscriber current_IMU;
+ros::Subscriber local_pose;
+
+ros::ServiceClient arm_client;
 //-----------------------------------------//
 //---------------Classes-------------------//
 //-----------------------------------------//
@@ -106,145 +117,85 @@ void move(bool detect_flag, bool shortestL,	bool shortestR,	bool shortestC,	doub
 //void react(double dshortest, double sensor_msgs);
 //void Tuning (double P, double I, double D, double Kp, double Ki, double Kd);
 
-//-----------------------------------------//
-//-------Subscriber and Publisher ---------//
-//-----------------------------------------//
-class SubscribeAndPublishIMU
-{
-public:
-  SubscribeAndPublishIMU()
-  {
 
-	  current_IMU = nh.subscribe<sensor_msgs::Imu>("/sensor_msgs/Imu", 50, imu_cb);//Get IMU status and values
-
-	  update_IMU = nh.advertise<sensor_msgs::Imu>("/sensor_msgs/Imu", 50);
-
-  }
-
-  void imu_cb (const sensor_msgs::ImuConstPtr& rcoutmsg)
-  {
-  	sensor_msgs::Imu IMU;
-
-  	ROS_INFO("Angular velocity: ", IMU.angular_velocity);
-  	ROS_INFO("Angular velocity covariance: ", IMU.angular_velocity_covariance);
-  	ROS_INFO("linear acceleration: ", IMU.linear_acceleration);
-  	ROS_INFO("linear acceleration covariance: ", IMU.linear_acceleration_covariance);
-
-  	update_IMU.publish(IMU);
-  }
-
-private:
-  ros::NodeHandle nh;
-  ros::Publisher update_IMU;
-  ros::Subscriber current_IMU;
-
-};
-
-class SubscribeAndPublishState
-{
-public:
-  SubscribeAndPublishState()
-  {
-
-	  current_state = nh.subscribe<mavros_msgs::State>("/mavros_msgs/state", 60, state_cb);	//Get current UAV status
-
-	  update_state = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 60);
-
-  }
-
-  void state_cb (const mavros_msgs::StateConstPtr& statemsg)
-  {
-  	mavros_msgs::State current_state;
-
-  	// wait for FCU connection
-      while(ros::ok() && !current_state.connected){
-      	ros::spinOnce();
-      	ros::Duration().sleep();
-      }
-      while(ros::ok() && current_state.connected)
-      {
-          mavros_msgs::CommandBool arm_cmd;
-          arm_cmd.request.value = 1;
-          ROS_INFO("Arming status: %s", arm_cmd.Response);
-      }
-
-
-  //    mavros_msgs::SetMode offb_set_mode;
-  //    offb_set_mode.request.custom_mode = "OFFBOARD";
-  //
-  //    ros::Time last_request = ros::Time::now();
-  //
-  //    while(ros::ok()){
-  //        if( current_state.mode != "OFFBOARD" && (ros::Time::now() - last_request > ros::Duration(5.0)))
-  //        {
-  //            if( set_mode_client.call(offb_set_mode) && offb_set_mode.response.mode_sent)
-  //            {
-  //                ROS_INFO("Offboard enabled");
-  //            }
-  //            last_request = ros::Time::now();
-  //        } else {
-  //            if( !current_state.armed && (ros::Time::now() - last_request > ros::Duration(5.0)))
-  //            {
-  //                if( arming_client.call(arm_cmd) && arm_cmd.)
-  //                {
-  //                    ROS_INFO("Vehicle armed");
-  //                }
-  //                last_request = ros::Time::now();
-  //            }
-  //        }
-      	update_state.publish(current_state);
-        ros::spinOnce();
-        ros::Duration().sleep();
-  }
-
-private:
-  ros::NodeHandle nh;
-  ros::Publisher update_state;
-  ros::Subscriber current_state;
-
-};
-
-class SubscribeAndPublishInitiate
-{
-public:
-  SubscribeAndPublishInitiate()
-  {
-
-	  local_pose = nh.subscribe<mavros_msgs::PositionTarget>("/mavros_msgs/PositionTarget", 60, PoseTarg_cb);				//Get Current pose
-	  local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("mavros_msgs/setpoint_position/local", 60);	//Send goal pose to UAV
-	  goal = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 60);
-
-  }
-
-void PoseTarg_cb (const mavros_msgs::PositionTargetConstPtr& rcoutmsg)
-{
-	mavros_msgs::State current_state;
-	if(ros::ok() && current_state.connected)
-    {
-
-    //move quad to starting position
-
-    	geometry_msgs::PoseStamped pose;
-        pose.pose.position.x = 0;
-        pose.pose.position.y = 0;
-        pose.pose.position.z = 2;
-        ros::Duration(5).sleep(); //sleep for 5 seconds
-
-        local_pos_pub.publish(pose);
-    }
-
-}
-
-private:
-  ros::NodeHandle nh;
-  ros::Publisher goal;
-  ros::Subscriber local_pose;
-  ros::Publisher local_pos_pub;
-
-};
 //-----------------------------------------//
 //---------Subscriber callbacks------------//
 //-----------------------------------------//
+
+void imu_cb (const sensor_msgs::ImuConstPtr& rcoutmsg)//class method subscriber
+{
+
+  	sensor_msgs::Imu IMU;
+  	ROS_INFO_STREAM("Angular velocity: " << IMU.angular_velocity);
+  	ROS_INFO_STREAM("linear acceleration: " << IMU.linear_acceleration);
+}
+
+void state_cb (const mavros_msgs::StateConstPtr& statecb)
+{
+	ROS_INFO("Attempting to arm quad");
+	ros::NodeHandle nh;
+	arm_client = nh.serviceClient<mavros_msgs::CommandBool>("/armclient");
+    update_state = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 10);
+
+	//Step 1: Arm the quad
+  	mavros_msgs::State state_now;
+  	bool arm_response;
+  	mavros_msgs::CommandBool::Request arming_message;
+  	mavros_msgs::CommandBool::Response arming_response;
+  	arming_message.value = 1;
+  	bool armed = arm_client.call(arming_message, arming_response);
+
+  	// wait for FCU connection
+  	while(ros::ok() && !state_now.connected)
+  	{
+  		ROS_INFO("Not connected.");
+  		ros::Duration().sleep();
+  	}
+  	//FCU connected
+  	while(ros::ok() && state_now.connected)
+  	{
+  		//Check if armed
+  		if(armed)
+  		{
+  			ROS_INFO("Quad armed!");
+  		}else
+  		{
+  			ROS_ERROR_STREAM("Quad unarmed!");
+  		}
+  		ros::Duration(0.1).sleep();
+  	}
+  	update_state.publish(state_now);
+}
+
+
+void PoseTarg_cb (const mavros_msgs::PositionTargetConstPtr& rcoutmsg)
+{
+    ros::NodeHandle nh;
+	local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("mavros_msgs/setpoint_position/local", 10);	//Send goal pose to UAV
+
+	//Step 2: Fly to initial position
+
+   	geometry_msgs::PoseStamped pose;
+
+	//Step 3: Set goal
+
+    mavros_msgs::PositionTarget end;
+
+	cout << "Select desired pose, x: \n";
+	cin >> end.position.x;
+
+	cout << "Select desired pose, y: \n";
+	cin >> end.position.y;
+
+	cout << "Select desired pose, z: \n";
+	cin >> end.position.z;
+
+    pose.pose.position.x = end.position.x;
+    pose.pose.position.y = end.position.y;
+    pose.pose.position.z = end.position.z;
+    local_pos_pub.publish(pose);
+
+}
 
 void detect_cb (const std_msgs::Float64MultiArrayConstPtr& detectmsg)
 {
@@ -317,33 +268,24 @@ void detect_cb (const std_msgs::Float64MultiArrayConstPtr& detectmsg)
 		if (center < left) dshortest = center;
 
 		//test by cout
-		ROS_INFO("shortestL: %s\n", shortestL, "shortestC: %s\n", shortestC, "shortestR: %s\n", shortestR, "dshortest: %s\n", dshortest);
-
+		ROS_INFO_STREAM("shortestL:  \n" << shortestL);
+		ROS_INFO_STREAM("shortestC:  \n" << shortestC);
+		ROS_INFO_STREAM("shortestR:  \n" << shortestR);
+		ROS_INFO_STREAM("dshortest:  \n" << dshortest);
 		}
-	ros::spin();
-
-
 }
-
-
-
 
 void RCOut_cb (const mavros_msgs::RCOutConstPtr& rcoutmsg)
 {
-	ros::Publisher RC_state_now;
-	mavros_msgs::RCOut RC_now;
-	ROS_INFO("Roll channel: %s", RC_now.channels[1]);
-	ROS_INFO("Pitch channel: %s", RC_now.channels[2]);
-	ROS_INFO("Throttle channel: %s", RC_now.channels[3]);
-	ROS_INFO("Yaw channel: %s", RC_now.channels[4]);
 
-	RC_state_now.publish(RC_now);
-	ros::spin();
+	mavros_msgs::RCOut RC_now;
+	ROS_INFO("Roll channel: %d", RC_now.channels[1]);
+	ROS_INFO("Pitch channel: %d", RC_now.channels[2]);
+	ROS_INFO("Throttle channel: %d", RC_now.channels[3]);
+	ROS_INFO("Yaw channel: %d", RC_now.channels[4]);
+
 }
 
-ros::Subscriber detection_sub;
-ros::Subscriber RC_state_now;
-ros::Publisher CustomRC;
 
 //-----------------------------------------//
 //----------------Main---------------------//
@@ -357,40 +299,65 @@ int main(int argc, char **argv)
 
 
     //-----------------------------------------//
-    //----------Assign topic names-------------//
+    //-------Subscriber and Publisher ---------//
     //-----------------------------------------//
-    ros::Subscriber detection_sub = nh.subscribe<std_msgs::Float64MultiArray>("/detection", 60, detect_cb);					//Get distances from camera
-    ros::Subscriber RC_state_now = nh.subscribe<mavros_msgs::RCOut>("/mavros_msgs/RCOut", 60, RCOut_cb);//Get current RC values
-    ros::Publisher CustomRC = nh.advertise<mavros_msgs::OverrideRCIn>("/mavros_msgs/OverrideRCIn",60);			//Send control input for Collision Avoidance
+    ros::Subscriber detection_sub = nh.subscribe("/detection", 10, &detect_cb);					//Get distances from camera
+    ros::Subscriber RC_state_now = nh.subscribe("/mavros_msgs/RCOut", 10, &RCOut_cb);			//Get current RC values
+    ros::Subscriber current_state = nh.subscribe("/mavros_msgs/state", 10, &state_cb);			//Get current UAV status
+	ros::Subscriber current_IMU = nh.subscribe("/sensor_msgs/Imu", 60, &imu_cb);				//Get IMU status and values
+	ros::Subscriber local_pose = nh.subscribe("/mavros_msgs/PositionTarget", 10, &PoseTarg_cb);	//Get Current pose
 
-    SubscribeAndPublishIMU SAPIMU;
-    SubscribeAndPublishState SAPState;
+	ros::Publisher goal = nh.advertise<mavros_msgs::State>("/mavros_msgs/state", 10);
+    ros::Publisher CustomRC = nh.advertise<mavros_msgs::OverrideRCIn>("/mavros_msgs/OverrideRCIn",10);			//Send control input for Collision Avoidance
+	ros::Publisher update_IMU = nh.advertise<sensor_msgs::Imu>("/sensor_msgs/Imu", 60);
 
-    geometry_msgs::PoseStamped pose;
+
+
+
+
+  	mavros_msgs::State state_now;
+   	geometry_msgs::PoseStamped pose;
     mavros_msgs::PositionTarget end;
-
-	cout << "Select desired pose, x: \n";
-	cin >> end.position.x;
-
-	cout << "Select desired pose, y: \n";
-	cin >> end.position.y;
-
-	cout << "Select desired pose, z: \n";
-	cin >> end.position.z;
-
-    while(ros::ok())
+    while(ros::ok() && state_now.connected)
     {
         do{
 
-        	ros::Rate r(10);
-        	double move();
+        	ros::Rate r(5);
+        	void move();
             ros::spinOnce();
             r.sleep();
 
     	}while((pose.pose.position.x =! end.position.x) && (pose.pose.position.y != end.position.y) && (pose.pose.position.z != end.position.z));
 
-    }
+        //Goal reached
+        ros::ServiceClient disarm_client;
+    	geometry_msgs::PoseStamped pose;
+        pose.pose.position.x = 0;
+        pose.pose.position.y = 0;
+        pose.pose.position.z = 0;
+        ros::Duration(5).sleep(); //sleep for 5 seconds
+      	mavros_msgs::CommandBool::Request disarming_message;
+      	mavros_msgs::CommandBool::Response disarming_response;
+      	disarming_message.value = 0;
+      	bool disarmed = disarm_client.call(disarming_message, disarming_response);
+  		//Check if armed
+  		if(disarmed)
+  		{
+  			ROS_INFO("Quad disarmed!");
+  		}else
+  		{
 
+  	      	while(disarming_message.value == 1)
+  	      	{
+  	  			ROS_ERROR_STREAM("Quad armed!");
+  	      		disarming_message.value = 0;
+  	  	      	bool disarmed = disarm_client.call(disarming_message, disarming_response);
+  	      	}
+  		}
+  		ros::Duration(0.1).sleep();
+
+    }
+    ros::spin();
 }
 
 //-----------------------------------------//
