@@ -94,12 +94,12 @@
 using namespace std;
 
 ros::Publisher CustomRC;
-ros::Publisher RC_state_now;
 ros::Publisher goal;
 ros::Publisher update_IMU;
 ros::Publisher update_state;
 ros::Publisher local_pos_pub;
 
+ros::Subscriber RC_state_now;
 ros::Subscriber detection_sub;
 ros::Subscriber current_state;
 ros::Subscriber current_IMU;
