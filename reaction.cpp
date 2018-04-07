@@ -44,8 +44,16 @@
 	 *
 	 * ==================Final suggested method to output value from detection.cpp to reaction.cpp================================================
 	 *
-	 * Create data type using struct 'Obsdistance' containing floats (L, C, R) with 'frame_res' object.
-	 * ie. frame_res.Left;
+	 * UseFloat64MultiArray to store and send values as a topic to reaction.cpp
+	 * 	std_msgs::Float64MultiArray detection_sub;
+	 *	double dshortest;
+	 *	float left, right, center;
+	 *	bool shortestL, shortestR, shortestC;
+	 *
+	 *	left = detection_sub.data[0];
+	 *	right = detection_sub.data[1];
+	 *	center = detection_sub.data[2];
+	 *
 	 * 	   frame_res.Center;
 	 * 	   frame_res.Right;
 	 *
@@ -173,11 +181,7 @@ void PoseTarg_cb (const mavros_msgs::PositionTargetConstPtr& rcoutmsg)
     ros::NodeHandle nh;
 	local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("mavros_msgs/setpoint_position/local", 10);	//Send goal pose to UAV
 
-	//Step 2: Fly to initial position
-
-   	geometry_msgs::PoseStamped pose;
-
-	//Step 3: Set goal
+	//Step 2: Set goal
 
     mavros_msgs::PositionTarget end;
 
@@ -190,9 +194,23 @@ void PoseTarg_cb (const mavros_msgs::PositionTargetConstPtr& rcoutmsg)
 	cout << "Select desired pose, z: \n";
 	cin >> end.position.z;
 
-    pose.pose.position.x = end.position.x;
-    pose.pose.position.y = end.position.y;
-    pose.pose.position.z = end.position.z;
+	//Step 3: Once connected and armed, Fly to initial position (1m above home position)
+
+   	geometry_msgs::PoseStamped pose;
+
+    pose.pose.position.x = 0;
+    pose.pose.position.y = 0;
+    pose.pose.position.z = 1;
+    ros::Duration(5).sleep(); //sleep for 5 seconds
+
+    if(pose.pose.position.x == 0 && pose.pose.position.y == 0 && pose.pose.position.z == 1)
+    {
+        //Step 4: Set goal to be as
+        pose.pose.position.x = end.position.x;
+        pose.pose.position.y = end.position.y;
+        pose.pose.position.z = end.position.z;
+    }
+
     local_pos_pub.publish(pose);
 
 }
@@ -318,20 +336,20 @@ int main(int argc, char **argv)
   	mavros_msgs::State state_now;
    	geometry_msgs::PoseStamped pose;
     mavros_msgs::PositionTarget end;
-    while(ros::ok() && state_now.connected)
-    {
+//    if(ros::ok() && state_now.connected)
+//    {
         do{
-
+        	ROS_INFO("I just entered the do-loop!");
         	ros::Rate r(5);
         	void move();
-            ros::spinOnce();
-            r.sleep();
+            ros::spin();
+
 
     	}while((pose.pose.position.x =! end.position.x) && (pose.pose.position.y != end.position.y) && (pose.pose.position.z != end.position.z));
-
+        ROS_INFO("Im after the do-loop");
         //Goal reached
         ros::ServiceClient disarm_client;
-    	geometry_msgs::PoseStamped pose;
+    	//geometry_msgs::PoseStamped pose;
         pose.pose.position.x = 0;
         pose.pose.position.y = 0;
         pose.pose.position.z = 0;
@@ -356,7 +374,10 @@ int main(int argc, char **argv)
   		}
   		ros::Duration(0.1).sleep();
 
-    }
+//    }else
+//    {
+//    	ROS_WARN("ROS not set up properly OR quad not armed!!");
+//    }
     ros::spin();
 }
 
